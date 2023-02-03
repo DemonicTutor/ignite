@@ -17,26 +17,26 @@
 
 package org.apache.ignite.examples.datagrid;
 
-import javax.cache.Cache;
 import org.apache.ignite.Ignite;
 import org.apache.ignite.IgniteCache;
 import org.apache.ignite.Ignition;
-import org.apache.ignite.binary.BinaryObject;
 import org.apache.ignite.cache.CacheMode;
 import org.apache.ignite.cache.affinity.AffinityKey;
+import org.apache.ignite.cache.affinity.AffinityKeyMapped;
 import org.apache.ignite.cache.query.IndexQuery;
-import org.apache.ignite.cache.query.QueryCursor;
-import org.apache.ignite.cache.query.ScanQuery;
+import org.apache.ignite.cache.query.IndexQueryCriterion;
 import org.apache.ignite.cache.query.SqlFieldsQuery;
-import org.apache.ignite.cache.query.TextQuery;
+import org.apache.ignite.cache.query.annotations.QuerySqlField;
 import org.apache.ignite.configuration.CacheConfiguration;
 import org.apache.ignite.examples.ExampleNodeStartup;
 import org.apache.ignite.examples.model.Organization;
 import org.apache.ignite.examples.model.Person;
-import org.apache.ignite.lang.IgniteBiPredicate;
 
-import static org.apache.ignite.cache.query.IndexQueryCriteriaBuilder.eq;
-import static org.apache.ignite.cache.query.IndexQueryCriteriaBuilder.gt;
+
+import java.io.Serializable;
+import java.util.Set;
+
+import static org.apache.ignite.cache.query.IndexQueryCriteriaBuilder.*;
 
 /**
  * Cache queries example. This example demonstrates TEXT, FULL SCAN and INDEX
@@ -67,172 +67,113 @@ import static org.apache.ignite.cache.query.IndexQueryCriteriaBuilder.gt;
  * start node with {@code examples/config/example-ignite.xml} configuration.
  */
 public class CacheQueryExample {
-    /** Organizations cache name. */
-    private static final String ORG_CACHE = CacheQueryExample.class.getSimpleName() + "Organizations";
 
-    /** Persons collocated with Organizations cache name. */
     private static final String PERSON_CACHE = CacheQueryExample.class.getSimpleName() + "Persons";
 
-    /**
-     * Executes example.
-     *
-     * @param args Command line arguments, none required.
-     * @throws Exception If example execution failed.
-     */
-    public static void main(String[] args) throws Exception {
-        try (Ignite ignite = Ignition.start("examples/config/example-ignite.xml")) {
-            System.out.println();
-            System.out.println(">>> Cache query example started.");
+    public static final class PersonKey implements Serializable {
 
-            CacheConfiguration<Long, Organization> orgCacheCfg = new CacheConfiguration<>(ORG_CACHE);
+        private final long id;
+        @AffinityKeyMapped
+        @QuerySqlField(orderedGroups = @QuerySqlField.Group(name = "a_idx", order = 0))
+        private final long orgId;
 
-            orgCacheCfg.setCacheMode(CacheMode.PARTITIONED); // Default.
-            orgCacheCfg.setIndexedTypes(Long.class, Organization.class);
+        public PersonKey(long id, long organizationId) {
+            this.id = id;
+            this.orgId = organizationId;
+        }
 
-            CacheConfiguration<AffinityKey<Long>, Person> personCacheCfg =
-                new CacheConfiguration<>(PERSON_CACHE);
-
-            personCacheCfg.setCacheMode(CacheMode.PARTITIONED); // Default.
-            personCacheCfg.setIndexedTypes(AffinityKey.class, Person.class);
-
-            try {
-                // Create caches.
-                ignite.getOrCreateCache(orgCacheCfg);
-                ignite.getOrCreateCache(personCacheCfg);
-
-                // Populate caches.
-                initialize();
-
-                // Example for SCAN-based query based on a predicate.
-                scanQuery();
-
-                // Example for TEXT-based querying for a given string in peoples resumes.
-                textQuery();
-
-                // Example for INDEX-based query with index criteria.
-                indexQuery();
-            }
-            finally {
-                // Distributed cache could be removed from cluster only by Ignite.destroyCache() call.
-                ignite.destroyCache(PERSON_CACHE);
-                ignite.destroyCache(ORG_CACHE);
-            }
-
-            print("Cache query example finished.");
+        @Override
+        public String toString() {
+            return "PersonKey{" +
+                    "id=" + id +
+                    ", orgId=" + orgId +
+                    '}';
         }
     }
 
-    /**
-     * Example for scan query based on a predicate using binary objects.
-     */
-    private static void scanQuery() {
-        IgniteCache<BinaryObject, BinaryObject> cache = Ignition.ignite()
-            .cache(PERSON_CACHE).withKeepBinary();
+    public static final class Person implements Serializable {
 
-        ScanQuery<BinaryObject, BinaryObject> scan = new ScanQuery<>(
-            new IgniteBiPredicate<BinaryObject, BinaryObject>() {
-                @Override public boolean apply(BinaryObject key, BinaryObject person) {
-                    return person.<Double>field("salary") <= 1000;
-                }
+        @QuerySqlField(orderedGroups = {@QuerySqlField.Group(name = "a_idx", order = 1), @QuerySqlField.Group(name = "b_idx", order = 1)})
+        public String role;
+        @QuerySqlField(orderedGroups = {@QuerySqlField.Group(name = "a_idx", order = 2), @QuerySqlField.Group(name = "b_idx", order = 2)})
+        public String other;
+        @QuerySqlField(orderedGroups = {@QuerySqlField.Group(name = "a_idx", order = 3), @QuerySqlField.Group(name = "b_idx", order = 3)})
+        public long salary;
+
+        public Person(long salary, String role, String other) {
+            this.salary = salary;
+            this.role = role;
+            this.other = other;
+        }
+
+        @Override
+        public String toString() {
+            return "Person{" +
+                    "role='" + role + '\'' +
+                    ", other='" + other + '\'' +
+                    ", salary=" + salary +
+                    '}';
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        try (final var ignite = Ignition.start("examples/config/example-ignite.xml")) {
+            try {
+                ignite.getOrCreateCache(new CacheConfiguration<>(PERSON_CACHE).setIndexedTypes(PersonKey.class, Person.class));
+                initialize();
+                indexQuery();
             }
-        );
-
-        // Execute queries for salary ranges.
-        print("People with salaries between 0 and 1000 (queried with SCAN query): ", cache.query(scan).getAll());
+            finally {
+                ignite.destroyCache(PERSON_CACHE);
+            }
+        }
     }
 
-    /**
-     * Example for TEXT queries using LUCENE-based indexing of people's resumes.
-     */
-    private static void textQuery() {
-        IgniteCache<Long, Person> cache = Ignition.ignite().cache(PERSON_CACHE);
-
-        //  Query for all people with "Master Degree" in their resumes.
-        QueryCursor<Cache.Entry<Long, Person>> masters =
-            cache.query(new TextQuery<Long, Person>(Person.class, "Master"));
-
-        // Query for all people with "Bachelor Degree" in their resumes.
-        QueryCursor<Cache.Entry<Long, Person>> bachelors =
-            cache.query(new TextQuery<Long, Person>(Person.class, "Bachelor"));
-
-        print("Following people have 'Master Degree' in their resumes: ", masters.getAll());
-        print("Following people have 'Bachelor Degree' in their resumes: ", bachelors.getAll());
-    }
-
-    /**
-     * Example for query indexes with criteria and binary objects.
-     */
     private static void indexQuery() {
-        IgniteCache<Long, Person> cache = Ignition.ignite().cache(PERSON_CACHE);
+        final var cache = Ignition.ignite().<PersonKey, Person>cache(PERSON_CACHE);
 
-        // Query for all people who work in the organization "ApacheIgnite".
-        QueryCursor<Cache.Entry<Long, Person>> igniters = cache.query(
-            new IndexQuery<Long, Person>(Person.class)
-                .setCriteria(eq("orgId", 1L))
-        );
+        doQuery(cache, "orgId >= 0, role[a,b], other[x]",  gte("orgId", 0L), in("role", Set.of("a", "b")), in("other", Set.of("x"))); // WRONG
+        doQuery(cache, "orgId >= 0, role[a], other[x]",    gte("orgId", 0L), in("role", Set.of("a")),      in("other", Set.of("x"))); // WRONG
+        doQuery(cache, "orgId >= 0, role[b], other[x]",    gte("orgId", 0L), in("role", Set.of("b")),      in("other", Set.of("x"))); // WRONG
+        doQuery(cache, "orgId >= 0, role[a,b], other = x", gte("orgId", 0L), in("role", Set.of("a", "b")), eq("other", "x")); // WRONG
 
-        print("Following people work in the 'ApacheIgnite' organization (queried with INDEX query): ",
-            igniters.getAll());
+        doQuery(cache, "orgId >= 0, role[a]",                      gte("orgId", 0L),        in("role", Set.of("a")));
+        doQuery(cache, "orgId >= 0, role = a, other = x",          gte("orgId", 0L),        eq("role", "a"),       eq("other", "x"));
+        doQuery(cache, "orgId[1,2], role = a, other = x",          in("orgId", Set.of(1L, 2L)), eq("role", "a"),       eq("other", "x"));
+        doQuery(cache, "orgId[1,2], role[a], other[x]",            in("orgId", Set.of(1L, 2L)), in("role", Set.of("a")),   in("other", Set.of("x")));
+        doQuery(cache, "orgId[1,2], role[a], other[x], salary[1]", in("orgId", Set.of(1L, 2L)), in("role", Set.of("a")),   in("other", Set.of("x")),   in("salary", Set.of(1)));
 
-        // Query for all people who work in the organization "Other" and have salary more than 1,500.
-        QueryCursor<Cache.Entry<Long, Person>> others = cache.query(
-            new IndexQuery<Long, Person>(Person.class)  // Index name {@link Person#ORG_SALARY_IDX} is optional.
-                .setCriteria(eq("orgId", 2L), gt("salary", 1500.0)));
-
-        print("Following people work in the 'Other' organizations and have salary more than 1500 (queried with INDEX query): ",
-            others.getAll());
-
-        // Query for all people who have salary more than 1,500 using BinaryObject.
-        QueryCursor<Cache.Entry<BinaryObject, BinaryObject>> rich = cache.withKeepBinary().query(
-            new IndexQuery<BinaryObject, BinaryObject>(Person.class.getName())
-                .setCriteria(gt("salary", 1500.0)));
-
-        print("Following people have salary more than 1500 (queried with INDEX query and using binary objects): ",
-            rich.getAll());
-
-        // Query for all people who have salary more than 1,500 and have 'Master Degree' in their resumes.
-        QueryCursor<Cache.Entry<BinaryObject, BinaryObject>> richMasters = cache.withKeepBinary().query(
-            new IndexQuery<BinaryObject, BinaryObject>(Person.class.getName())
-                .setCriteria(gt("salary", 1500.0))
-                .setFilter((k, v) -> v.<String>field("resume").contains("Master")));
-
-        print("Following people have salary more than 1500 and Master degree (queried with INDEX query): ",
-            richMasters.getAll());
+        doQuery(cache, "role[b], other[y], salary > 1", in("role", Set.of("b")),     in("other", Set.of("y")), gt("salary", 1));
+        doQuery(cache, "role[a], other[x]",             in("role", Set.of("a")),     in("other", Set.of("x")));
+        doQuery(cache, "role[b], other[y]",             in("role", Set.of("b")),     in("other", Set.of("y")));
+        doQuery(cache, "role[b], other[x]",             in("role", Set.of("b")),     in("other", Set.of("x")));
+        doQuery(cache, "role[a,b], other[x]",           in("role", Set.of("a","b")), in("other", Set.of("x")));
     }
 
-    /**
-     * Populate cache with test data.
-     */
+    private static void doQuery(IgniteCache<PersonKey, Person> cache, String msg, IndexQueryCriterion... criteria) {
+        var query = cache.query(new IndexQuery<PersonKey, Person>(Person.class).setCriteria(criteria));
+        print(msg, query.getAll());
+    }
+
     private static void initialize() {
-        IgniteCache<Long, Organization> orgCache = Ignition.ignite().cache(ORG_CACHE);
+        IgniteCache<PersonKey, Person> pc2 = Ignition.ignite().cache(PERSON_CACHE);
+        pc2.put(new PersonKey(1, 1), new Person(1, "a", "x"));
+        pc2.put(new PersonKey(2, 1), new Person(1, "a", "y"));
+        pc2.put(new PersonKey(3, 1), new Person(1, "b", "y"));
+        pc2.put(new PersonKey(4, 1), new Person(1, "b", "x"));
+        pc2.put(new PersonKey(5, 1), new Person(2, "a", "x"));
+        pc2.put(new PersonKey(6, 1), new Person(2, "a", "y"));
+        pc2.put(new PersonKey(7, 1), new Person(2, "b", "y"));
+        pc2.put(new PersonKey(8, 1), new Person(2, "b", "x"));
 
-        // Clear cache before running the example.
-        orgCache.clear();
-
-        // Organizations.
-        Organization org1 = new Organization("ApacheIgnite");
-        Organization org2 = new Organization("Other");
-
-        orgCache.put(org1.id(), org1);
-        orgCache.put(org2.id(), org2);
-
-        IgniteCache<AffinityKey<Long>, Person> colPersonCache = Ignition.ignite().cache(PERSON_CACHE);
-
-        // Clear caches before running the example.
-        colPersonCache.clear();
-
-        // People.
-        Person p1 = new Person(org1, "John", "Doe", 2000, "John Doe has Master Degree.");
-        Person p2 = new Person(org1, "Jane", "Doe", 1000, "Jane Doe has Bachelor Degree.");
-        Person p3 = new Person(org2, "John", "Smith", 1000, "John Smith has Bachelor Degree.");
-        Person p4 = new Person(org2, "Jane", "Smith", 2000, "Jane Smith has Master Degree.");
-
-        // Note that in this example we use custom affinity key for Person objects
-        // to ensure that all persons are collocated with their organizations.
-        colPersonCache.put(p1.key(), p1);
-        colPersonCache.put(p2.key(), p2);
-        colPersonCache.put(p3.key(), p3);
-        colPersonCache.put(p4.key(), p4);
+        pc2.put(new PersonKey( 9, 2), new Person(1, "a", "x"));
+        pc2.put(new PersonKey(10, 2), new Person(1, "a", "y"));
+        pc2.put(new PersonKey(11, 2), new Person(1, "b", "y"));
+        pc2.put(new PersonKey(12, 2), new Person(1, "b", "x"));
+        pc2.put(new PersonKey(13, 2), new Person(2, "a", "x"));
+        pc2.put(new PersonKey(14, 2), new Person(2, "a", "y"));
+        pc2.put(new PersonKey(15, 2), new Person(2, "b", "y"));
+        pc2.put(new PersonKey(16, 2), new Person(2, "b", "x"));
     }
 
     /**
